@@ -289,18 +289,19 @@ class FileHandleBuffer {
 	}
 
 	async read(buffer, offset, length, position) {
-		if (BigInt(position) + BigInt(length) <= 0n) {
+		position = BigInt(position);
+		if (position + BigInt(length) <= 0n) {
 			return 0;
 		}
-		if (BigInt(position) < 0n) {
+		if (position < 0n) {
 			offset -= Number(position);
 			length += Number(position);
 			position = 0n;
 		}
-		if (BigInt(position) >= BigInt(this.#buffer.length)) {
+		if (position >= BigInt(this.#buffer.length)) {
 			return 0;
 		}
-		if (BigInt(position) + BigInt(length) > BigInt(this.#buffer.length)) {
+		if (position + BigInt(length) > BigInt(this.#buffer.length)) {
 			this.#buffer.copy(buffer, offset, Number(position), this.#buffer.length);
 			return this.#buffer.length - Number(position);
 		}
@@ -353,7 +354,7 @@ class FileSequenceReader {
 		if (length <= 0) {
 			return 0;
 		}
-		const ret = await this.#file.read(buffer, offset, length, this.#position, ...options);
+		const ret = await this.#file.read(buffer, offset, length, Number(this.#position), ...options);
 		this.#position += BigInt(ret);
 		return ret;
 	}
@@ -362,7 +363,7 @@ class FileSequenceReader {
 		if (this.#limit !== false && this.#position >= this.#limit) {
 			return true;
 		}
-		return await this.#file.read(this.#buffer, 0, 1, this.#position, ...options) < 1;
+		return await this.#file.read(this.#buffer, 0, 1, Number(this.#position), ...options) < 1;
 	}
 
 	async readInt8(...options) {
@@ -502,7 +503,7 @@ class BlockDevFile {
 
 	async readBlock(offset, ...options) {
 		const res = Buffer.alloc(this.#blocksize);
-		await this.#file.read(res, 0, this.#blocksize, BigInt(offset) * BigInt(this.#blocksize), ...options);
+		await this.#file.read(res, 0, this.#blocksize, Number(BigInt(offset) * BigInt(this.#blocksize)), ...options);
 		return res;
 	}
 }
@@ -564,16 +565,16 @@ class BlockDevQcow2 {
 					let position = header.readBigUInt64BE(64);
 					const snapshot = Buffer.alloc(40);
 					for (const i of range(0, snapshots_count)) {
-						await file.read(snapshot, 0, 40, position);
+						await file.read(snapshot, 0, 40, Number(position));
 						position += 40n;
 						const l1_offset = snapshot.readBigUInt64BE(0);
 						const l1_size = snapshot.readUInt32BE(8);
 						const unique_id = Buffer.alloc(snapshot.readUInt16BE(12));
 						const name = Buffer.alloc(snapshot.readUInt16BE(14));
 						position += BigInt(snapshot.readUInt16BE(36));
-						await file.read(unique_id, 0, unique_id.length, position);
+						await file.read(unique_id, 0, unique_id.length, Number(position));
 						position += BigInt(unique_id.length);
-						await file.read(name, 0, name.length, position);
+						await file.read(name, 0, name.length, Number(position));
 						position += BigInt(name.length);
 						position += 7n - ((position + 7n) & 7n);
 						self.#snapshots.push({
@@ -584,7 +585,7 @@ class BlockDevQcow2 {
 							name: name.toString(),
 							load: async () => {
 								self.#l1 = Buffer.alloc(l1_size * 8);
-								await file.read(self.#l1, 0, l1_size * 8, l1_offset);
+								await file.read(self.#l1, 0, l1_size * 8, Number(l1_offset));
 							}
 						});
 					}
@@ -593,24 +594,24 @@ class BlockDevQcow2 {
 				self.#numblocks = (header.readBigUInt64BE(24) + BigInt(self.#blocksize - 1)) / BigInt(self.#blocksize);
 				const l1_size = header.readUInt32BE(36);
 				self.#l1 = Buffer.alloc(l1_size * 8);
-				await file.read(self.#l1, 0, l1_size * 8, header.readBigUInt64BE(40));
+				await file.read(self.#l1, 0, l1_size * 8, Number(header.readBigUInt64BE(40)));
 				const backing_file_offset = header.readBigUInt64BE(8);
 				if (backing_file_offset !== 0n) {
 					const backing_file_size = header.readUInt32BE(16);
 					const backing_file_name = Buffer.alloc(backing_file_size);
-					await file.read(backing_file_name, 0, backing_file_size, backing_file_offset);
+					await file.read(backing_file_name, 0, backing_file_size, Number(backing_file_offset));
 					let backing_file_type = 'raw';
 					const extension_id = Buffer.alloc(8);
 					let position = BigInt(header.length);
 					while (true) {
-						await file.read(extension_id, 0, 8, position);
+						await file.read(extension_id, 0, 8, Number(position));
 						const type = extension_id.readUInt32BE(0);
 						if (type === 0x00000000) {
 							break;
 						}
 						if (type === 0xe2792aca) {
 							const data = Buffer.alloc(extension_id.readUInt32BE(4))
-							await file.read(data, 0, data.length, position + 8n);
+							await file.read(data, 0, data.length, Number(position + 8n));
 							backing_file_type = data.toString();
 							break;
 						}
@@ -666,7 +667,7 @@ class BlockDevQcow2 {
 		if (this.#l2_offset !== l1) {
 			this.#l2_offset = l1;
 			this.#l2 = Buffer.alloc(this.#blocksize);
-			await this.#file.read(this.#l2, 0, this.#blocksize, this.#l2_offset);
+			await this.#file.read(this.#l2, 0, this.#blocksize, Number(this.#l2_offset));
 		}
 		const l2 = this.#l2.readBigUInt64BE(Number((offset % l2_entries) << 3n));
 		if (l2 === 0n) {
@@ -679,7 +680,7 @@ class BlockDevQcow2 {
 			// FIXME: Compressed clusters. Support at least deflate
 			return res;
 		}
-		await this.#file.read(res, 0, this.#blocksize, l2 & 0x00FFFFFFFFFFFFFFn);
+		await this.#file.read(res, 0, this.#blocksize, Number(l2 & 0x00FFFFFFFFFFFFFFn));
 		return res;
 	}
 
@@ -776,7 +777,7 @@ class GPT {
 		let partition_offset = header.readBigUInt64LE(72) * BigInt(dev.blockSize);
 		while (partition_count > 0) {
 			partition_count--;
-			await partition_file.read(partition_buffer, 0, 128, partition_offset);
+			await partition_file.read(partition_buffer, 0, 128, Number(partition_offset));
 			partition_offset += partitionSize;
 			const first_block = partition_buffer.readBigUInt64LE(32);
 			const last_block = partition_buffer.readBigUInt64LE(40);
@@ -842,7 +843,7 @@ class FileSystemExt4 {
 		self.#loaded_indirects = [-1n, -1n, -1n];
 		self.#last_extent_inode = -1n;
 		const superblock = Buffer.alloc(1024);
-		await file.read(superblock, 0, 1024, 1024n);
+		await file.read(superblock, 0, 1024, 1024);
 		if (superblock.readUInt16LE(0x38) !== 0xEF53) {
 			throw new Error('Invalid magic signature');
 		}
@@ -953,13 +954,13 @@ class FileSystemExt4 {
 			if (filetype === 0xA000) {	// Symlink
 				if (this.#loaded_inode !== loaded_inode) {
 					this.#loaded_inode = loaded_inode;
-					await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+					await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 				}
 				const first_read = await this.#readFile(temp_buffer, 0, 1024, 0n);
 				if (first_read < 1024) {
 					if (this.#loaded_inode !== loaded_inode) {
 						this.#loaded_inode = loaded_inode;
-						await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+						await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 					}
 					// Sufficiently small link target can be decoded in a single buffer
 					// Most symlinks should go through this path
@@ -976,7 +977,7 @@ class FileSystemExt4 {
 					const plaintext_prefix = decipher.update(temp_buffer.subarray(0, 992))
 					if (this.#loaded_inode !== loaded_inode) {
 						this.#loaded_inode = loaded_inode;
-						await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+						await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 					}
 					if (await this.#writeFile(target, plaintext_prefix, 0, plaintext_prefix.length, write_position) < plaintext_prefix.length) {
 						break;
@@ -984,7 +985,7 @@ class FileSystemExt4 {
 					write_position += BigInt(plaintext_prefix.length);
 					if (this.#loaded_inode !== loaded_inode) {
 						this.#loaded_inode = loaded_inode;
-						await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+						await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 					}
 					const next_read = await this.#readFile(temp_buffer, 0, 1024, position);
 					if (next_read < 1024) {
@@ -997,7 +998,7 @@ class FileSystemExt4 {
 							const plaintext_infix = decipher.update(temp_buffer.subarray(0, swizzle_start - 16));
 							if (this.#loaded_inode !== loaded_inode) {
 								this.#loaded_inode = loaded_inode;
-								await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+								await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 							}
 							if (await this.#writeFile(target, plaintext_infix, 0, plaintext_infix.length, write_position) < plaintext_infix.length) {
 								break;
@@ -1013,7 +1014,7 @@ class FileSystemExt4 {
 						const plaintext_suffix = decipher.update(cts_cipher).subarray(0, Number(position - write_position));
 						if (this.#loaded_inode !== loaded_inode) {
 							this.#loaded_inode = loaded_inode;
-							await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+							await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 						}
 						await this.#writeFile(target, plaintext_suffix, 0, plaintext_suffix.length, write_position);
 						break;
@@ -1025,7 +1026,7 @@ class FileSystemExt4 {
 			if (filetype !== 0x4000) {	// Not a directory. Treat it as a normal file
 				if (this.#loaded_inode !== loaded_inode) {
 					this.#loaded_inode = loaded_inode;
-					await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+					await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 				}
 				const filesize = this.#getFileSize();
 				const extents = !!(flags & 0x80000);
@@ -1044,14 +1045,14 @@ class FileSystemExt4 {
 			while (true) {
 				if (this.#loaded_inode !== loaded_inode) {
 					this.#loaded_inode = loaded_inode;
-					await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+					await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 				}
 				if (await this.#readFile(temp_buffer, 0, 8, position) < 8) {
 					break;
 				}
 				if (this.#loaded_inode !== loaded_inode) {
 					this.#loaded_inode = loaded_inode;
-					await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+					await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 				}
 				const next = temp_buffer.readUInt16LE(0x4);
 				const name_len = this.#direntry_with_filetype?temp_buffer.readUInt8(0x6):temp_buffer.readUInt16LE(0x6);
@@ -1063,7 +1064,7 @@ class FileSystemExt4 {
 					await this.#readFile(name_buffer, 0, name_len, position + 8n);
 					if (this.#loaded_inode !== loaded_inode) {
 						this.#loaded_inode = loaded_inode;
-						await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+						await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 					}
 					const decrypted_name = decryptCts(name_buffer, derived_key.subarray(0, 32));
 					await this.#writeFile(target, decrypted_name, 0, name_len, position + 8n);
@@ -1074,7 +1075,7 @@ class FileSystemExt4 {
 					if (new_len < name_len) {
 						if (this.#loaded_inode !== loaded_inode) {
 							this.#loaded_inode = loaded_inode;
-							await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+							await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 						}
 						if (this.#direntry_with_filetype) {
 							temp_buffer.writeUInt8(new_len);
@@ -1117,7 +1118,7 @@ class FileSystemExt4 {
 		const group_start = start_offset + index * BigInt(this.#group_descriptor.length);
 		if (this.#loaded_group_descriptor !== group_start) {
 			this.#loaded_group_descriptor = group_start;
-			await this.#file.read(this.#group_descriptor, 0, this.#group_descriptor.length, group_start);
+			await this.#file.read(this.#group_descriptor, 0, this.#group_descriptor.length, Number(group_start));
 		}
 	}
 
@@ -1137,7 +1138,7 @@ class FileSystemExt4 {
 		const inode_bitmap_start = (BigInt(inode_bitmap_lo) + (BigInt(inode_bitmap_hi) << 32n)) * this.#blocksize + (inode_index >> 3n);
 		if (this.#loaded_inode_bitmap !== inode_bitmap_start) {
 			this.#loaded_inode_bitmap = inode_bitmap_start;
-			await this.#file.read(this.#inode_bitmap, 0, 1, inode_bitmap_start);
+			await this.#file.read(this.#inode_bitmap, 0, 1, Number(inode_bitmap_start));
 		}
 		if (!(this.#inode_bitmap[0] & (1 << Number(inode_index & 7n)))) {
 			return false;
@@ -1147,7 +1148,7 @@ class FileSystemExt4 {
 		const inode_start = (BigInt(inode_table_lo) + (BigInt(inode_table_hi) << 32n)) * this.#blocksize + inode_index * BigInt(this.#inode.length);
 		if (this.#loaded_inode !== inode_start) {
 			this.#loaded_inode = inode_start;
-			await this.#file.read(this.#inode, 0, this.#inode.length, inode_start);
+			await this.#file.read(this.#inode, 0, this.#inode.length, Number(inode_start));
 		}
 		return true;
 	}
@@ -1186,27 +1187,27 @@ class FileSystemExt4 {
 				this.#last_extent_max = (next < entries)?BigInt(this.#inode.readUInt32LE(0x34 + 12 * next)):0n;
 			}
 			while (true) {
-				await this.#file.read(this.#temp_buffer, 0, 8, extent_block);
+				await this.#file.read(this.#temp_buffer, 0, 8, Number(extent_block));
 				if (this.#temp_buffer.readUInt16LE(0x0) !== 0xF30A) {
 					throw new Error('Invalid extents magic signature');
 				}
 				const entries = this.#temp_buffer.readUInt16LE(0x2);
 				const depth = this.#temp_buffer.readUInt16LE(0x6);
 				const next = await binarySearchAsync(entries, async (i) => {
-					await this.#file.read(this.#temp_buffer, 0, 4, extent_block + 12n * BigInt(i) + 12n);
+					await this.#file.read(this.#temp_buffer, 0, 4, Number(extent_block + 12n * BigInt(i) + 12n));
 					return BigInt(this.#temp_buffer.readUInt32LE(0)) > block;
 				});
 				if (next < 1) {
 					return false;
 				}
-				await this.#file.read(this.#temp_buffer, 0, 4, extent_block + 12n * BigInt(next));
+				await this.#file.read(this.#temp_buffer, 0, 4, Number(extent_block + 12n * BigInt(next)));
 				const min = BigInt(this.#temp_buffer.readUInt32LE(0));
 				let max = 0n;
 				if (next < entries) {
-					await this.#file.read(this.#temp_buffer, 0, 4, extent_block + 12n * BigInt(next) + 12n);
+					await this.#file.read(this.#temp_buffer, 0, 4, Number(extent_block + 12n * BigInt(next) + 12n));
 					max = BigInt(this.#temp_buffer.readUInt32LE(0));
 				}
-				await this.#file.read(this.#temp_buffer, 0, 8, extent_block + 12n * BigInt(next) + 4n);
+				await this.#file.read(this.#temp_buffer, 0, 8, Number(extent_block + 12n * BigInt(next) + 4n));
 				if (depth === 0) {
 					const shift = block - min;
 					let len = BigInt(this.#temp_buffer.readUInt16LE(0));
@@ -1241,7 +1242,7 @@ class FileSystemExt4 {
 			const indirect1 = indirect0 * this.#blocksize + (block << 2n);
 			if (this.#loaded_indirects[0] !== indirect1) {
 				this.#loaded_indirects[0] = indirect1;
-				await this.#file.read(this.#temp_buffer, 0, 4, indirect1);
+				await this.#file.read(this.#temp_buffer, 0, 4, Number(indirect1));
 				this.#indirects[0] = BigInt(this.#temp_buffer.readUInt32LE(0));
 			}
 			if (!this.#indirects[0]) {
@@ -1260,7 +1261,7 @@ class FileSystemExt4 {
 			block %= indirects_per_block;
 			if (this.#loaded_indirects[0] !== indirect1) {
 				this.#loaded_indirects[0] = indirect1;
-				await this.#file.read(this.#temp_buffer, 0, 4, indirect1);
+				await this.#file.read(this.#temp_buffer, 0, 4, Number(indirect1));
 				this.#indirects[0] = BigInt(this.#temp_buffer.readUInt32LE(0));
 			}
 			if (!this.#indirects[0]) {
@@ -1269,7 +1270,7 @@ class FileSystemExt4 {
 			const indirect2 = this.#indirects[0] * this.#blocksize + (block << 2n);
 			if (this.#loaded_indirects[1] !== indirect2) {
 				this.#loaded_indirects[1] = indirect2;
-				await this.#file.read(this.#temp_buffer, 0, 4, indirect2);
+				await this.#file.read(this.#temp_buffer, 0, 4, Number(indirect2));
 				this.#indirects[1] = BigInt(this.#temp_buffer.readUInt32LE(0));
 			}
 			if (!this.#indirects[1]) {
@@ -1286,7 +1287,7 @@ class FileSystemExt4 {
 		block %= indirects_per_block2;
 		if (this.#loaded_indirects[0] !== indirect1) {
 			this.#loaded_indirects[0] = indirect1;
-			await this.#file.read(this.#temp_buffer, 0, 4, indirect1);
+			await this.#file.read(this.#temp_buffer, 0, 4, Number(indirect1));
 			this.#indirects[0] = BigInt(this.#temp_buffer.readUInt32LE(0));
 		}
 		if (!this.#indirects[0]) {
@@ -1296,7 +1297,7 @@ class FileSystemExt4 {
 		block %= indirects_per_block;
 		if (this.#loaded_indirects[1] !== indirect2) {
 			this.#loaded_indirects[1] = indirect2;
-			await this.#file.read(this.#temp_buffer, 0, 4, indirect2);
+			await this.#file.read(this.#temp_buffer, 0, 4, Number(indirect2));
 			this.#indirects[1] = BigInt(this.#temp_buffer.readUInt32LE(0));
 		}
 		if (!this.#indirects[1]) {
@@ -1305,7 +1306,7 @@ class FileSystemExt4 {
 		const indirect3 = this.#indirects[1] * this.#blocksize + (block << 2n);
 		if (this.#loaded_indirects[2] !== indirect3) {
 			this.#loaded_indirects[2] = indirect3;
-			await this.#file.read(this.#temp_buffer, 0, 4, indirect3);
+			await this.#file.read(this.#temp_buffer, 0, 4, Number(indirect3));
 			this.#indirects[2] = BigInt(this.#temp_buffer.readUInt32LE(0));
 		}
 		if (!this.#indirects[2]) {
@@ -1324,7 +1325,7 @@ class FileSystemExt4 {
 			buffer.fill(0, offset, length);
 			return;
 		}
-		const res = await this.#file.read(buffer, offset, length, BigInt(mapped) * this.#blocksize + block_offset, ...key?[key, block]:[]);
+		const res = await this.#file.read(buffer, offset, length, Number(BigInt(mapped) * this.#blocksize + block_offset), ...key?[key, block]:[]);
 		if (res < length) {
 			buffer.fill(0, offset + res, length - res);
 		}
@@ -1515,7 +1516,7 @@ class FileSystemExt4 {
 								const ret = await this.#readFile(buffer, offset, length, position);
 								if (this.#loaded_inode !== loaded_inode) {
 									this.#loaded_inode = loaded_inode;
-									await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+									await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 								}
 								return ret;
 							}
@@ -1533,7 +1534,7 @@ class FileSystemExt4 {
 								position = BigInt(this.#inode.length);
 							}
 							position += this.#loaded_inode;
-							return ret + await this.#file.read(buffer, offset, length, position);
+							return ret + await this.#file.read(buffer, offset, length, Number(position));
 						},
 						write: async (target, buffer, offset, length, position) => {
 							position = BigInt(position);
@@ -1552,7 +1553,7 @@ class FileSystemExt4 {
 								const ret = target.write(buffer, offset, length, position);
 								if (this.#loaded_inode !== loaded_inode) {
 									this.#loaded_inode = loaded_inode;
-									await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+									await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 								}
 								return ret;
 							}
@@ -1579,7 +1580,7 @@ class FileSystemExt4 {
 		}
 		let name_buffer = Buffer.alloc(0x10);
 		const attribute_root = (BigInt(this.#inode.readUInt32LE(0x68)) + (BigInt(this.#inode.readUInt16LE(0x76)) << 32n)) * this.#blocksize;
-		if (attribute_root === 0n || await this.#file.read(name_buffer, 0, 4, attribute_root) < 4) {
+		if (attribute_root === 0n || await this.#file.read(name_buffer, 0, 4, Number(attribute_root)) < 4) {
 			return 0;
 		}
 		if (name_buffer.readUInt32LE(0) !== 0xEA020000) {
@@ -1587,7 +1588,7 @@ class FileSystemExt4 {
 		}
 		let attribute = attribute_root + 0x20n;
 		while (true) {
-			if (await this.#file.read(name_buffer, 0, 0x10, attribute) < 0x10) {
+			if (await this.#file.read(name_buffer, 0, 0x10, Number(attribute)) < 0x10) {
 				break;
 			}
 			const name_len = name_buffer.readUInt8(0);
@@ -1601,7 +1602,7 @@ class FileSystemExt4 {
 			if (name_buffer.length < name_len) {
 				name_buffer = Buffer.alloc(name_len);
 			}
-			if (await this.#file.read(name_buffer, 0, name_len, attribute + 0x10n) < name_len) {
+			if (await this.#file.read(name_buffer, 0, name_len, Number(attribute + 0x10n)) < name_len) {
 				break;
 			}
 			yield {
@@ -1624,7 +1625,7 @@ class FileSystemExt4 {
 						return await this.#readFile(buffer, offset, length, position);
 					}
 					position += attribute_root;
-					return await this.#file.read(buffer, offset, length, position);
+					return await this.#file.read(buffer, offset, length, Number(position));
 				},
 				write: async (target, buffer, offset, length, position) => {
 					position = BigInt(position);
@@ -1654,7 +1655,7 @@ class FileSystemExt4 {
 			if (attribute.index !== index || !name.equals(attribute.name)) {
 				continue;
 			}
-			return await attribute.read(buffer, offset, length, position);
+			return await attribute.read(buffer, offset, length, Number(position));
 		}
 		return 0;
 	}
@@ -1733,14 +1734,14 @@ class FileSystemExt4 {
 							while (true) {
 								if (this.#loaded_inode !== loaded_inode) {
 									this.#loaded_inode = loaded_inode;
-									await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+									await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 								}
 								if (await this.#readFile(temp_buffer, 0, 8, position) < 8) {
 									return null;
 								}
 								if (this.#loaded_inode !== loaded_inode) {
 									this.#loaded_inode = loaded_inode;
-									await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+									await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 								}
 								const entry_inode = temp_buffer.readUInt32LE(0);
 								const next = temp_buffer.readUInt16LE(0x4);
@@ -1769,7 +1770,7 @@ class FileSystemExt4 {
 					read: async (buffer, offset, length, position) => {
 						if (this.#loaded_inode !== loaded_inode) {
 							this.#loaded_inode = loaded_inode;
-							await this.#file.read(this.#inode, 0, this.#inode.length, loaded_inode);
+							await this.#file.read(this.#inode, 0, this.#inode.length, Number(loaded_inode));
 						}
 						// FIXME: Symlinks need special handling that is closer to directories than to files
 						return await this.#readFile(buffer, offset, length, position, derived_key);
@@ -1796,7 +1797,7 @@ class SQLiteDatabase {
 	static async open(file) {
 		const self = new SQLiteDatabase();
 		const header = Buffer.alloc(100);
-		if (await file.read(header, 0, 100, 0n) < 100) {
+		if (await file.read(header, 0, 100, 0) < 100) {
 			throw new Error('Incomplete SQLite header');
 		}
 		if (!header.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) {
@@ -1842,7 +1843,7 @@ class SQLiteDatabase {
 		tables: for await (const [buffer_iterator, total_size] of this.#iterateBTree(0n)) {
 			const [type, name, _, rootpage] = await iteratorToArrayAsync(this.#iterateRecords(buffer_iterator, total_size), 4);
 			for await (const str of using(await type.open())) {
-				if (await str.read(buffer, 0, type_buffer.length + 1, 0n) !== type_buffer.length) {
+				if (await str.read(buffer, 0, type_buffer.length + 1, 0) !== type_buffer.length) {
 					continue tables;
 				}
 				if (!buffer.subarray(0, type_buffer.length).equals(type_buffer)) {
@@ -1850,7 +1851,7 @@ class SQLiteDatabase {
 				}
 			}
 			for await (const str of using(await name.open())) {
-				if (await str.read(buffer, 0, name_buffer.length + 1, 0n) !== name_buffer.length) {
+				if (await str.read(buffer, 0, name_buffer.length + 1, 0) !== name_buffer.length) {
 					continue tables;
 				}
 				if (!buffer.subarray(0, name_buffer.length).equals(name_buffer)) {
@@ -2192,7 +2193,7 @@ async function navigatePath(dirent, ...path) {
 
 async function readAsBuffer(file) {
 	const ret = Buffer.alloc(Number((await file.stat()).size));
-	const res = await file.read(ret, 0, ret.length, 0n);
+	const res = await file.read(ret, 0, ret.length, 0);
 	return ret.subarray(0, res);
 }
 
@@ -2201,7 +2202,7 @@ async function hashFile(hash, file, position, length) {
 	const buffer = Buffer.alloc(512);
 	if (!length) {
 		while (true) {
-			const res = await file.read(buffer, 0, 512, position);
+			const res = await file.read(buffer, 0, 512, Number(position));
 			if (res < 512) {
 				if (res > 0) {
 					hash.update(buffer.subarray(0, res));
@@ -2213,7 +2214,7 @@ async function hashFile(hash, file, position, length) {
 		}
 	}
 	while (length >= 512) {
-		const res = await file.read(buffer, 0, 512, position);
+		const res = await file.read(buffer, 0, 512, Number(position));
 		if (res < 512) {
 			if (res > 0) {
 				hash.update(buffer.subarray(0, res));
@@ -2225,7 +2226,7 @@ async function hashFile(hash, file, position, length) {
 		length -= 512;
 	}
 	if (length > 0) {
-		const res = await file.read(buffer, 0, length, position);
+		const res = await file.read(buffer, 0, length, Number(position));
 		if (res > 0) {
 			hash.update(buffer.subarray(0, res));
 		}
@@ -2249,7 +2250,7 @@ async function prefixHashFile(prefix, ...path) {
 async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 	let has_prefix = false;
 	const keymaster_key = Buffer.alloc(32);
-	if (await keymaster_key_blob_file.read(keymaster_key, 0, 5, 0n) < 5) {
+	if (await keymaster_key_blob_file.read(keymaster_key, 0, 5, 0) < 5) {
 		throw new Error('keymaster_key_blob is invalid');
 	}
 	// A typical keymaster key has the following contents:
@@ -2301,7 +2302,7 @@ async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 	if (!keymaster_key.subarray(0, 5).equals(Buffer.from([0, 32, 0, 0, 0]))) {
 		// Check for optional prefix 'pKMblob\0'
 		if (keymaster_key.subarray(0, 5).equals(Buffer.from([0x70, 0x4B, 0x4D, 0x62, 0x6C]))) {
-			if (await keymaster_key_blob_file.read(keymaster_key, 5, 8, 5n) >= 8) {
+			if (await keymaster_key_blob_file.read(keymaster_key, 5, 8, 5) >= 8) {
 				if (keymaster_key.subarray(5, 13).equals(Buffer.from([0x6F, 0x62, 0x00, 0, 32, 0, 0, 0]))) {
 					has_prefix = true;
 				}
@@ -2317,14 +2318,14 @@ async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 		const hmac = createHmac('sha256', 'IntegrityAssuredBlob0\x00');
 		let pos = has_prefix?8n:0n;
 		while (true) {
-			const res = await keymaster_key_blob_file.read(keymaster_key, 0, 32, pos);
+			const res = await keymaster_key_blob_file.read(keymaster_key, 0, 32, Number(pos));
 			if (res < 32) {
 				if (res < 8) {
 					throw new Error('Unexpected end of file reading keymaster_key_blob');
 				}
 				if (res > 8) {
 					hmac.update(keymaster_key.subarray(0, res - 8));
-					if (await keymaster_key_blob_file.read(keymaster_key, 0, 8, pos + BigInt(res - 8)) < 8) {
+					if (await keymaster_key_blob_file.read(keymaster_key, 0, 8, Number(pos + BigInt(res - 8))) < 8) {
 						throw new Error('Unexpected end of file reading keymaster_key_blob');
 					}
 				}
@@ -2371,7 +2372,7 @@ async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 			throw new Error('keymaster_key_blob signature did not match');
 		}
 	}
-	if (await keymaster_key_blob_file.read(keymaster_key, 0, 32, has_prefix?13n:5n) < 32) {
+	if (await keymaster_key_blob_file.read(keymaster_key, 0, 32, has_prefix?13:5) < 32) {
 		throw new Error('keymaster_key_blob is invalid');
 	}
 	const encrypted_key = await readAsBuffer(encrypted_key_file);
@@ -2519,21 +2520,49 @@ for await (const dev of using(await BlockDevQcow2.open('encryptionkey.img.qcow2'
 			ext4_data.addKey(await decryptKey((await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'encrypted_key')).open(), new FileHandleBuffer(Buffer.concat([Buffer.from('0020000000', 'hex'), prefixHash('Android key wrapping key generation SHA512', fbe_key).subarray(0, 32)]))));
 		}
 
+		// console.log is surprisingly time-consuming. This should throttle it
+		let last_done = new Date();
+		let should_do = null;
+		function rateLimit(func) {
+			const now = new Date();
+			if (now - last_done < 100) {
+				should_do = func;
+				return;
+			}
+			last_done = now;
+			should_do = null;
+			func();
+		}
+		function rateLimitFlush() {
+			should_do && should_do();
+			should_do = null;
+		}
+
 		const change_logger = new ChangeLogger(decrypting_dev.blockSize);
 		console.log();
 		console.log();
 		for await (const [inode, total] of ext4_data.decrypt(change_logger)) {
-			console.log('\x1b[A\x1b[A\x1b[2KDecrypting', inode, 'of', total, 'inodes');
-			console.log('\x1b[2KChanged', change_logger.blockCount, 'blocks and', change_logger.bufferCount, 'buffers');
+			rateLimit(() => {
+				console.log('\x1b[A\x1b[A\x1b[2KDecrypting', inode, 'of', total, 'inodes');
+				console.log('\x1b[2KChanged', change_logger.blockCount, 'blocks and', change_logger.bufferCount, 'buffers');
+			});
 		}
+		rateLimitFlush();
 		for await (const outfile of using(await fopen('userdata-decrypted.img', 'w'))) {
+			const blankbuffer = Buffer.alloc(decrypting_dev.blockSize);
+			await outfile.truncate(Number(decrypting_dev.blockCount * BigInt(decrypting_dev.blockSize)));
 			console.log();
 			for (const i of range(0n, decrypting_dev.blockCount)) {
 				const block = await decrypting_dev.readBlock(i, ...change_logger.getBlockOptions(i));
 				change_logger.apply(block, 0, block.length, BigInt(block.length) * i);
-				await outfile.write(block);
-				console.log('\x1b[A\x1b[2KWritten', i + 1n, 'of', decrypting_dev.blockCount, 'blocks');
+				if (!block.equals(blankbuffer)) {	// Skip the write if 0-filled
+					await outfile.write(block, 0, block.length, Number(BigInt(block.length) * i));
+				}
+				rateLimit(() => {
+					console.log('\x1b[A\x1b[2KWritten', i + 1n, 'of', decrypting_dev.blockCount, 'blocks');
+				});
 			}
 		}
+		rateLimitFlush();
 	}
 }
