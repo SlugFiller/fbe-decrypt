@@ -1055,6 +1055,9 @@ class FileSystemExt4 {
 				}
 				const next = temp_buffer.readUInt16LE(0x4);
 				const name_len = this.#direntry_with_filetype?temp_buffer.readUInt8(0x6):temp_buffer.readUInt16LE(0x6);
+				if (next < 8 + name_len) {
+					break;
+				}
 				if (name_len > 15) {
 					const name_buffer = Buffer.alloc(name_len);
 					await this.#readFile(name_buffer, 0, name_len, position + 8n);
@@ -1743,7 +1746,7 @@ class FileSystemExt4 {
 								const next = temp_buffer.readUInt16LE(0x4);
 								const name_len = this.#direntry_with_filetype?temp_buffer.readUInt8(0x6):temp_buffer.readUInt16LE(0x6);
 								if (next < 8 + name_len) {
-									break;
+									return null;
 								}
 								const name_buffer = Buffer.alloc(name_len);
 								await this.#readFile(name_buffer, 0, name_len, position + 8n);
@@ -2436,7 +2439,7 @@ for await (const dev of using(await BlockDevQcow2.open('encryptionkey.img.qcow2'
 			for await (const file of using(await value.open())) {
 				value_string = value.encoding_decoder(await readAsBuffer(file));
 			}
-			sp_handle = BigInt(value_string).toString(16);
+			sp_handle = (BigInt(value_string) & 0xFFFFFFFFFFFFFFFFn).toString(16);
 			break;
 		}
 		const spblob = await readAsBuffer((await navigatePath(ext4_data.root, 'system_de', '0', 'spblob', sp_handle.padStart(16, '0') + '.spblob')).open());
