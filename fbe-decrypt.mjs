@@ -931,7 +931,7 @@ class FileSystemExt4 {
 			if (!(flags & 0x800)) {
 				continue;
 			}
-			temp_buffer.writeUInt32LE(flags & ~0x800, 0)
+			temp_buffer.writeUInt32LE(flags & ~0x800, 0);
 			target.write(temp_buffer, 0, 4, loaded_inode + 0x20n);
 			const profile = Buffer.alloc(40);
 			const res = await this.#readExtendedAttribute(9, Buffer.from('c'), profile, 0, profile.length, 0n)
@@ -1812,6 +1812,7 @@ class SQLiteDatabase {
 		self.#x_index = ((self.#u - 12n) * 64n / 255n) - 23n;
 		self.#m = ((self.#u - 12n) * 32n / 255n) - 23n;
 		switch (header.readUInt32BE(56)) {
+			case 0:	// Legacy file. Use utf8 as default
 			case 1:
 				self.#encoding = 'utf8';
 				self.#encoding_encoder = (str) => Buffer.from(str);
@@ -1839,7 +1840,7 @@ class SQLiteDatabase {
 		const buffer = Buffer.alloc((name_buffer.length > type_buffer.length?name_buffer.length:type_buffer) + 1);
 		let root = false;
 		tables: for await (const [buffer_iterator, total_size] of this.#iterateBTree(0n)) {
-			const [type, name, _, rootpage] = await iteratorToArrayAsync(this.#iterateRecords(buffer_iterator, total_size))
+			const [type, name, _, rootpage] = await iteratorToArrayAsync(this.#iterateRecords(buffer_iterator, total_size), 4);
 			for await (const str of using(await type.open())) {
 				if (await str.read(buffer, 0, type_buffer.length + 1, 0n) !== type_buffer.length) {
 					continue tables;
@@ -1872,7 +1873,7 @@ class SQLiteDatabase {
 		const blocktype = buffer.readUInt8(blockstart);
 		const cellcount = buffer.readUInt16BE(blockstart + 3);
 		const cellarray = blockstart + ((blocktype === 2 || blocktype === 5)?12:8);
-		for (const index of range(0, cellcount?cellcount:65536)) {
+		for (const index of range(0, cellcount)) {
 			const sequence_reader = new FileSequenceReader(new FileHandleBuffer(buffer), buffer.readUInt16BE(cellarray + (index << 1)));
 			if (blocktype === 2 || blocktype === 5) {
 				yield *this.#iterateBTree(await sequence_reader.readUInt32BE() - 1);
@@ -2246,6 +2247,7 @@ async function prefixHashFile(prefix, ...path) {
 }
 
 async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
+	let has_prefix = false;
 	const keymaster_key = Buffer.alloc(32);
 	if (await keymaster_key_blob_file.read(keymaster_key, 0, 5, 0n) < 5) {
 		throw new Error('keymaster_key_blob is invalid');
@@ -2277,7 +2279,7 @@ async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 	// 01 00 00 00 - None
 	// 08 00 00 30 - MAC length =
 	// 80 00 00 00 - 128
-	// F1 01 00 70 - No authentication required =
+	// F7 01 00 70 - No authentication required =
 	// 01 - True
 	// BD 02 00 60 - Creation datetime =
 	// u64le - Milliseconds since epoch
@@ -2297,13 +2299,23 @@ async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 	// If a different algorithm is specified, the code below doesn't support it anyway
 	// In that case, the decryption will simply fail, so no need to check anything else
 	if (!keymaster_key.subarray(0, 5).equals(Buffer.from([0, 32, 0, 0, 0]))) {
-		throw new Error('keymaster_key_blob is invalid or unsupported key algorithm is used');
+		// Check for optional prefix 'pKMblob\0'
+		if (keymaster_key.subarray(0, 5).equals(Buffer.from([0x70, 0x4B, 0x4D, 0x62, 0x6C]))) {
+			if (await keymaster_key_blob_file.read(keymaster_key, 5, 8, 5n) >= 8) {
+				if (keymaster_key.subarray(5, 13).equals(Buffer.from([0x6F, 0x62, 0x00, 0, 32, 0, 0, 0]))) {
+					has_prefix = true;
+				}
+			}
+		}
+		if (!has_prefix) {
+			throw new Error('keymaster_key_blob is invalid or unsupported key algorithm is used');
+		}
 	}
 	if (appid) {
 		// We could technically skip this verification step
 		// If the key is corrupt in any way, the decryption below would fail anyway
 		const hmac = createHmac('sha256', 'IntegrityAssuredBlob0\x00');
-		let pos = 0n;
+		let pos = has_prefix?8n:0n;
 		while (true) {
 			const res = await keymaster_key_blob_file.read(keymaster_key, 0, 32, pos);
 			if (res < 32) {
@@ -2359,7 +2371,7 @@ async function decryptKey(encrypted_key_file, keymaster_key_blob_file, appid) {
 			throw new Error('keymaster_key_blob signature did not match');
 		}
 	}
-	if (await keymaster_key_blob_file.read(keymaster_key, 0, 32, 5n) < 32) {
+	if (await keymaster_key_blob_file.read(keymaster_key, 0, 32, has_prefix?13n:5n) < 32) {
 		throw new Error('keymaster_key_blob is invalid');
 	}
 	const encrypted_key = await readAsBuffer(encrypted_key_file);
@@ -2442,64 +2454,70 @@ for await (const dev of using(await BlockDevQcow2.open('encryptionkey.img.qcow2'
 			sp_handle = (BigInt(value_string) & 0xFFFFFFFFFFFFFFFFn).toString(16);
 			break;
 		}
-		const spblob = await readAsBuffer((await navigatePath(ext4_data.root, 'system_de', '0', 'spblob', sp_handle.padStart(16, '0') + '.spblob')).open());
-		if (spblob.length < 58 || spblob.readUInt16BE() !== 0x0300) {
-			// Must be version 3 LSKF
-			throw new Error('Incompatible spblob file');
+		if (sp_handle === '') {
+			// Legacy system. No synthetic password means the CE key has a regular keymaster
+			ext4_data.addKey(await decryptKey((await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'encrypted_key')).open(), (await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'keymaster_key_blob')).open(), await prefixHashFile('Android secdiscardable SHA512', ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'secdiscardable')));
 		}
-		// Storage of the device-bound key in persistent.sqlite was added in Android 12
-		// Prior to it, the key was stored in '/misc/keystore/user_0/1000_USRSKEY_synthetic_password_' + sp_handle.padStart(16, '0') instead
-		const persistent_sqlite = await SQLiteDatabase.open((await navigatePath(ext4_data.root, 'misc', 'keystore', 'persistent.sqlite')).open());
-		let synthetic_password_key_id = 0;
-		for await (const row of persistent_sqlite.getTableRows('keyentry')) {
-			const [id, key_type, domain, namespace, alias] = await iteratorToArrayAsync(row(), 5);
-			let alias_string;
-			for await (const file of using(await alias.open())) {
-				alias_string = alias.encoding_decoder(await readAsBuffer(file));
+		else {
+			const spblob = await readAsBuffer((await navigatePath(ext4_data.root, 'system_de', '0', 'spblob', sp_handle.padStart(16, '0') + '.spblob')).open());
+			if (spblob.length < 58 || spblob.readUInt16BE() !== 0x0300) {
+				// Must be version 3 LSKF
+				throw new Error('Incompatible spblob file');
 			}
-			if (alias_string !== 'synthetic_password_' + sp_handle) {
-				continue;
+			// Storage of the device-bound key in persistent.sqlite was added in Android 12
+			// Prior to it, the key was stored in '/misc/keystore/user_0/1000_USRSKEY_synthetic_password_' + sp_handle.padStart(16, '0') instead
+			const persistent_sqlite = await SQLiteDatabase.open((await navigatePath(ext4_data.root, 'misc', 'keystore', 'persistent.sqlite')).open());
+			let synthetic_password_key_id = 0;
+			for await (const row of persistent_sqlite.getTableRows('keyentry')) {
+				const [id, key_type, domain, namespace, alias] = await iteratorToArrayAsync(row(), 5);
+				let alias_string;
+				for await (const file of using(await alias.open())) {
+					alias_string = alias.encoding_decoder(await readAsBuffer(file));
+				}
+				if (alias_string !== 'synthetic_password_' + sp_handle) {
+					continue;
+				}
+				synthetic_password_key_id = id.value;
+				break;
 			}
-			synthetic_password_key_id = id.value;
-			break;
+			// In version 1, the order of decryption is opposite:
+			// Using the inner key first, and the key from the database second
+			// In versions 2 and 3, the inner key comes second
+			let spblob_decrypt_1 = null;
+			for await (const row of persistent_sqlite.getTableRows('blobentry')) {
+				const [id, subcomponent_type, keyentryid, blob] = await iteratorToArrayAsync(row(), 4);
+				if (keyentryid.value !== synthetic_password_key_id) {
+					continue;
+				}
+				for await (const file of using(await blob.open())) {
+					spblob_decrypt_1 = await decryptKey(new FileHandleBuffer(spblob.subarray(2)), file, true);
+				}
+				break;
+			}
+			if (spblob_decrypt_1 === null) {
+				throw new Exception('Could not find handle to decrypt synthetic password blob');
+			}
+			// If a PIN is set, then 'default-password' would be replaced with an scrypt hash of the PIN
+			// The salt and parameters for scrypt would need to be read from '/system_de/0/spblob/' + sp_handle.padStart(16, '0') + '.pwd'
+			const inner_key = prefixHash('application-id', Buffer.concat([Buffer.from('default-password'.padEnd(32, '\0')), await prefixHashFile('secdiscardable-transform', ext4_data.root, 'system_de', '0', 'spblob', sp_handle.padStart(16, '0') + '.secdis')])).subarray(0, 32);
+			const spblob_decrypt_2 = await decryptKey(new FileHandleBuffer(spblob_decrypt_1), new FileHandleBuffer(Buffer.concat([Buffer.from('0020000000', 'hex'), inner_key])));
+			// Version 3 key derivation uses NIST SP800-108 in counter mode
+			// The following is a single iteration for the label 'fbe-key'
+			// Versions 1 and 2 simply use prefixHash('fbe-key', spblob_decrypt_2)
+			const fbe_hmac = createHmac('sha256', spblob_decrypt_2);
+			fbe_hmac.update(Buffer.from(
+				'00000001' + // Counter
+				'6662652d6b6579' + // 'fbe-key'
+				'00' +
+				'616e64726f69642d73796e7468657469632d70617373776f72642d706572736f6e616c697a6174696f6e2d636f6e74657874' + // 'android-synthetic-password-personalization-context'
+				'00000190' + // Context length (in bits)
+				'00000100', // Output length (in bits)
+				'hex'));
+			const fbe_key = fbe_hmac.digest();
+			// If /misc/vold/user_keys/ce/0/current/secdiscardable is present, it would need to be mixed with fbe_key as
+			// fbe_key = prefixHashFile('Android secdiscardable SHA512', secdiscardable) + fbe_hmac.digest()
+			ext4_data.addKey(await decryptKey((await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'encrypted_key')).open(), new FileHandleBuffer(Buffer.concat([Buffer.from('0020000000', 'hex'), prefixHash('Android key wrapping key generation SHA512', fbe_key).subarray(0, 32)]))));
 		}
-		// In version 1, the order of decryption is opposite:
-		// Using the inner key first, and the key from the database second
-		// In versions 2 and 3, the inner key comes second
-		let spblob_decrypt_1 = null;
-		for await (const row of persistent_sqlite.getTableRows('blobentry')) {
-			const [id, subcomponent_type, keyentryid, blob] = await iteratorToArrayAsync(row(), 4);
-			if (keyentryid.value !== synthetic_password_key_id) {
-				continue;
-			}
-			for await (const file of using(await blob.open())) {
-				spblob_decrypt_1 = await decryptKey(new FileHandleBuffer(spblob.subarray(2)), file, true);
-			}
-			break;
-		}
-		if (spblob_decrypt_1 === null) {
-			throw new Exception('Could not find handle to decrypt synthetic password blob');
-		}
-		// If a PIN is set, then 'default-password' would be replaced with an scrypt hash of the PIN
-		// The salt and parameters for scrypt would need to be read from '/system_de/0/spblob/' + sp_handle.padStart(16, '0') + '.pwd'
-		const inner_key = prefixHash('application-id', Buffer.concat([Buffer.from('default-password'.padEnd(32, '\0')), await prefixHashFile('secdiscardable-transform', ext4_data.root, 'system_de', '0', 'spblob', sp_handle.padStart(16, '0') + '.secdis')])).subarray(0, 32);
-		const spblob_decrypt_2 = await decryptKey(new FileHandleBuffer(spblob_decrypt_1), new FileHandleBuffer(Buffer.concat([Buffer.from('0020000000', 'hex'), inner_key])));
-		// Version 3 key derivation uses NIST SP800-108 in counter mode
-		// The following is a single iteration for the label 'fbe-key'
-		// Versions 1 and 2 simply use prefixHash('fbe-key', spblob_decrypt_2)
-		const fbe_hmac = createHmac('sha256', spblob_decrypt_2);
-		fbe_hmac.update(Buffer.from(
-			'00000001' + // Counter
-			'6662652d6b6579' + // 'fbe-key'
-			'00' +
-			'616e64726f69642d73796e7468657469632d70617373776f72642d706572736f6e616c697a6174696f6e2d636f6e74657874' + // 'android-synthetic-password-personalization-context'
-			'00000190' + // Context length (in bits)
-			'00000100', // Output length (in bits)
-			'hex'));
-		const fbe_key = fbe_hmac.digest();
-		// If /misc/vold/user_keys/ce/0/current/secdiscardable is present, it would need to be mixed with fbe_key as
-		// fbe_key = prefixHashFile('Android secdiscardable SHA512', secdiscardable) + fbe_hmac.digest()
-		ext4_data.addKey(await decryptKey((await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'encrypted_key')).open(), new FileHandleBuffer(Buffer.concat([Buffer.from('0020000000', 'hex'), prefixHash('Android key wrapping key generation SHA512', fbe_key).subarray(0, 32)]))));
 
 		const change_logger = new ChangeLogger(decrypting_dev.blockSize);
 		console.log();
