@@ -921,6 +921,7 @@ class FileSystemExt4 {
 
 	async *decrypt(target) {
 		const temp_buffer = Buffer.alloc(1024);
+		const buffer_c = Buffer.from('c');
 		for (const inode of range(1, this.#inodes_count + 1)) {
 			if (!await this.#loadInode(inode)) {
 				continue;
@@ -932,16 +933,26 @@ class FileSystemExt4 {
 			if (!(flags & 0x800)) {
 				continue;
 			}
-			temp_buffer.writeUInt32LE(flags & ~0x800, 0);
-			target.write(temp_buffer, 0, 4, loaded_inode + 0x20n);
 			const profile = Buffer.alloc(40);
-			const res = await this.#readExtendedAttribute(9, Buffer.from('c'), profile, 0, profile.length, 0n)
+			const res = await this.#readExtendedAttribute(9, buffer_c, profile, 0, profile.length, 0n)
 			if (res < 40) {
 				continue;
 			}
 			const masterkey = this.#keys.get(profile.subarray(8, 24).toString('hex'));
 			if (!masterkey) {
 				continue;
+			}
+			// Only remove the encryption flag after we confirmed we can decrypt this inode
+			temp_buffer.writeUInt32LE(flags & ~0x800, 0);
+			target.write(temp_buffer, 0, 4, loaded_inode + 0x20n);
+			// Rename the encryption attribute to user.c, so tools don't mistake it for
+			// an encrypted inode with a missing flag
+			temp_buffer[0] = 1;
+			for await (const attribute of this.#iterateAttributes()) {
+				if (attribute.index !== 9 || !buffer_c.equals(attribute.name)) {
+					continue;
+				}
+				target.write(temp_buffer, 0, 1, attribute.root + 1n);
 			}
 			const hmac1 = createHmac('sha512', '');
 			hmac1.update(masterkey);
@@ -1498,6 +1509,7 @@ class FileSystemExt4 {
 					yield {
 						index: name_index,
 						name: this.#inode.subarray(attribute + 0x10, attribute + 0x10 + name_len),
+						root: this.#loaded_inode + BigInt(attribute),
 						size: value_size,
 						read: async (buffer, offset, length, position) => {
 							position = BigInt(position);
@@ -1608,6 +1620,7 @@ class FileSystemExt4 {
 			yield {
 				index: name_index,
 				name: name_buffer.subarray(0, name_len),
+				root: attribute,
 				size: value_size,
 				read: async (buffer, offset, length, position) => {
 					position = BigInt(position);
