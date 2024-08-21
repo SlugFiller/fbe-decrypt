@@ -2456,7 +2456,7 @@ for await (const dev of using(await BlockDevQcow2.open('encryptionkey.img.qcow2'
 			break;
 		}
 		if (sp_handle === '') {
-			// Legacy system. No synthetic password means the CE key has a regular keymaster
+			// Legacy system. No synthetic password means the CE key has a regular keymaster key
 			ext4_data.addKey(await decryptKey((await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'encrypted_key')).open(), (await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'keymaster_key_blob')).open(), await prefixHashFile('Android secdiscardable SHA512', ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'secdiscardable')));
 		}
 		else {
@@ -2517,6 +2517,7 @@ for await (const dev of using(await BlockDevQcow2.open('encryptionkey.img.qcow2'
 			const fbe_key = fbe_hmac.digest();
 			// If /misc/vold/user_keys/ce/0/current/secdiscardable is present, it would need to be mixed with fbe_key as
 			// fbe_key = prefixHashFile('Android secdiscardable SHA512', secdiscardable) + fbe_hmac.digest()
+			// However, it is usually absent if no PIN is set
 			ext4_data.addKey(await decryptKey((await navigatePath(ext4_data.root, 'misc', 'vold', 'user_keys', 'ce', '0', 'current', 'encrypted_key')).open(), new FileHandleBuffer(Buffer.concat([Buffer.from('0020000000', 'hex'), prefixHash('Android key wrapping key generation SHA512', fbe_key).subarray(0, 32)]))));
 		}
 

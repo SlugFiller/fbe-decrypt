@@ -6,7 +6,7 @@ This script also doubles as the most complete documentation of FBE, as the offic
 
 ## Usage
 
-First, you will need to [install NodeJS](https://nodejs.org/en/download/package-manager/all). Then, open a command line terminal, and nagivate to the location of the emulator image:
+First, you will need to [install NodeJS](https://nodejs.org/en/download/package-manager/all). Then, open a command line terminal, and navigate to the location of the emulator image:
 ```
 cd ~/.android/avd/MyDevice.avd
 ```
@@ -32,3 +32,7 @@ The script does not take any parameters, and makes several assumptions regarding
  - Device keys are encrypted using the software driver, and not using special hardware like chips supporting the Weaver API. This will necessarily be true for an emulator image, but might not apply to an actual device image
 
 Comments within the source code show where these assumptions are made, and give hints on how the code may be changed to support other configurations.
+
+## Important
+
+Before decrypting an image, make sure you shut down the emulator _using the emulated power button_. The emulator emulates a full system including a disk write cache. If the device is not shut down in a way the emulated system recognizes, some blocks may be left unwritten to disk. This could result in a failure to decrypt, or in a corrupt decrypted image.
