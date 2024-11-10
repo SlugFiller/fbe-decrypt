@@ -2509,7 +2509,7 @@ for await (const dev of using(await BlockDevQcow2.open('encryptionkey.img.qcow2'
 				break;
 			}
 			if (spblob_decrypt_1 === null) {
-				throw new Exception('Could not find handle to decrypt synthetic password blob');
+				throw new Error('Could not find handle to decrypt synthetic password blob');
 			}
 			// If a PIN is set, then 'default-password' would be replaced with an scrypt hash of the PIN
 			// The salt and parameters for scrypt would need to be read from '/system_de/0/spblob/' + sp_handle.padStart(16, '0') + '.pwd'
