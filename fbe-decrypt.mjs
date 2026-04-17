@@ -1936,6 +1936,9 @@ class SQLiteDatabase {
 				}
 			}, payload_size];
 		}
+		if (blocktype === 2 || blocktype === 5) {
+			yield *this.#iterateBTree(buffer.readUInt32BE(blockstart + 8) - 1);
+		}
 	}
 
 	async *#iterateRecords(buffer_iterator, total_size) {
